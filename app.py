@@ -1,61 +1,88 @@
 from flask import Flask, request, jsonify
-import openai
-from dotenv import load_dotenv
 import os
+import datetime
+import openai
+from dotenv import load_dotenv, find_dotenv
 
-# Load environment variables
+_ = load_dotenv(find_dotenv())
+
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.chains import ConversationChain
+from langchain.memory import ConversationBufferMemory, ConversationBufferWindowMemory
+
 load_dotenv()
 
-system_message = {
-    "role": "system",
-    "content": "You are a Healthcare assistant.\nWelcome the user with a message.\nAssess symptoms\nRefer to specific specialists mentioning the department\nIf assessed emergency condition from symptoms, straight away suggest dialling 108 to call an ambulance\nAsk one question at a time. Answer health-related queries only.\nThank you message on completing the assisting."
-}
-initial_message = {
-    "role": "assistant",
-    "content": "Welcome to JK Hospital! I'm your health care assistant.\nHow can I assist you with your health today?"
-}
-
-messages = [system_message,initial_message]
+memory = ConversationBufferMemory()
+memory.save_context(
+    {
+        "input": "You are a Healthcare assistant.\nWelcome the user with a message.\nAssess symptoms\nRefer to specific specialists mentioning the department\nIf assessed emergency condition from symptoms, straight away suggest dialling 108 to call an ambulance\nAsk one question at a time. Answer health-related queries only.\nThank you message on completing the assisting."
+    },
+    {
+        "output": "Welcome to JK Hospital! I'm your health care assistant.\nHow can I assist you with your health today?"
+    },
+)
 
 # Initialize the Flask application
 app = Flask(__name__)
 
 # Set up the OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = os.environ["OPENAI_API_KEY"]
 
 # Configure CORS settings
 from flask_cors import CORS
+
 CORS(app)
 
-@app.route('/', methods=['GET'])
+
+@app.route("/", methods=["GET"])
 def home():
-    return jsonify({'message': 'Home Page'}), 200
+    return jsonify({"message": "Home Page"}), 200
 
-@app.route('/ask', methods=['POST'])
+
+@app.route("/ask", methods=["POST"])
 def ask():
-    user_input = request.json.get('user_input', '')
+    user_input = request.json.get("user_input", "")
     if not user_input:
-        return jsonify({'message': 'User input is required'}), 400
+        return jsonify({"message": "User input is required"}), 400
 
-    # Append the user's input to the message history
-    messages.append({"role": "user", "content": user_input})
-
-    # Generate a response from the OpenAI model
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.5,
-            max_tokens=240,
-            top_p=0.9,
-            frequency_penalty=0,
-            presence_penalty=0
-        )
-        response_message = response.choices[0].message
-        messages.append(response_message)
-        return jsonify({'message': response_message}), 200
+        response = ChatOpenAI(temperature=0.9)
+        conversation = ConversationChain(llm=response, memory=memory, verbose=False)
+        response_message = conversation.predict(input=user_input)
+        # print(response_message)
+        return jsonify({"message": response_message, "memory": memory.buffer}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
+
+@app.route("/save-chat", methods=["GET"])
+def save_chat():
+    try:
+        current_datetime = datetime.datetime.now()
+        formatted_datetime = current_datetime.strftime("%Y%m%d%H%M%S")
+        file_name = f"ChatHistory{formatted_datetime}.txt"
+
+        conversation_history = memory.buffer
+        conversation_history = conversation_history[358:]
+
+        with open(file_name, "w") as file:
+            file.write(conversation_history)
+
+        memory.clear()
+        memory.save_context(
+            {
+                "input": "You are a Healthcare assistant.\nWelcome the user with a message.\nAssess symptoms\nRefer to specific specialists mentioning the department\nIf assessed emergency condition from symptoms, straight away suggest dialling 108 to call an ambulance\nAsk one question at a time. Answer health-related queries only.\nThank you message on completing the assisting."
+            },
+            {
+                "output": "Welcome to JK Hospital! I'm your health care assistant.\nHow can I assist you with your health today?"
+            },
+        )
+
+        return jsonify({"message": f"Conversation history saved as {file_name}"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
     app.run(debug=True)
